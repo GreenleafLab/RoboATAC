@@ -1,0 +1,44 @@
+---
+title: "Comparison between benchtop omniATAC vs roboATAC"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggsignif)
+
+df <- read.csv("01_comparison.csv", as.is=TRUE) %>% dplyr::filter(include==1)
+df$perc_dup <- df$perc_dup * 100
+df$ds_perc_dup <- df$ds_perc_dup * 100
+head(df)
+```
+
+## QC metrics across all samples
+
+### All reads
+``` {r}
+p1 <- ggplot(df, aes(x=cell_line, y=perc_mito, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0, 80)
+p2 <- ggplot(df, aes(x=cell_line, y=est_lib_size, fill=assay)) + geom_boxplot() + theme_classic()
+p3 <- ggplot(df, aes(x=cell_line, y=tss, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0, 20) + geom_hline(yintercept=7, linetype="dashed") + geom_hline(yintercept=5, linetype="dashed")
+p4 <- ggplot(df, aes(x=cell_line, y=perc_read_in_peak, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0,80) + geom_hline(yintercept=30, linetype="dashed") + geom_hline(yintercept=20, linetype="dashed")
+p5 <- ggplot(df, aes(x=cell_line, y=perc_dup, fill=assay)) + geom_boxplot() + theme_classic()
+lapply(paste0("p",1:5), function(n){get(n)})
+```
+
+```{r}
+p6 <- ggplot(df, aes(x=assay, y=perc_mito, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0,80)
+p7 <- ggplot(df, aes(x=assay, y=est_lib_size, fill=assay)) + geom_boxplot() + theme_classic()
+p8 <- ggplot(df, aes(x=assay, y=tss, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0, 20) + geom_hline(yintercept=7, linetype="dashed") + geom_hline(yintercept=5, linetype="dashed")
+p9 <- ggplot(df, aes(x=assay, y=perc_read_in_peak, fill=assay)) + geom_boxplot() + theme_classic() + ylim(0,80) + geom_hline(yintercept=30, linetype="dashed") + geom_hline(yintercept=20, linetype="dashed")
+p10 <- ggplot(df, aes(x=assay, y=perc_dup, fill=assay)) + geom_boxplot() + theme_classic()
+lapply(paste0("p",6:10), function(n){get(n)})
+```
+
+```{r}
+pdf("../../plots/00-techdev/01/comp_plots.pdf", width=7, height=5)
+lapply(paste0("p",1:10), function(n){get(n)})
+dev.off()
+```

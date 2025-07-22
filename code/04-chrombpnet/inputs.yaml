@@ -1,0 +1,123 @@
+# working directory
+BASE_DIR: "../../output/04-chrombpnet/"
+
+# contains .narrowPeak for each sample
+INPUT_PEAK_DIR: "../../output/01-preprocessing/output/peaks"
+
+# contains deduped .bam for each sample
+INPUT_BAM_DIR: "../../output/01-preprocessing/output/bams/deduped"
+
+# resource directory that has genome fasta, genome sizes and blacklist information
+#    if any of these files do not exist automatically download from encode
+RESOURCE_DIR: "../../data/chrombp_resources"
+RESOURCE:
+    GENOME: "hg38.fa"
+    CHROMSIZE: "hg38.chrom.sizes"
+    BLACKLIST: "blacklist.bed"
+
+# chromosome splits for training
+FOLD_DIR: "../../data/chrombp_resources/splits"
+FOLD: 
+  "0": "fold_0.json"
+  # "1": "fold_1.json"
+  # "2": "fold_2.json"
+  # "3": "fold_3.json"
+  # "4": "fold_4.json"
+
+CELLTYPE: "HEK293T"
+CONDITION:
+  - GFP_d100 
+  # - EF1a-SPI1_d100 
+  # - EF1a-SPI1_d075 
+  # - EF1a-SPI1_d050 
+  # - EF1a-SPI1_d025 
+  # - EF1a-SPI1_d005
+  # - ELF1_d100
+  # - ELF1_d075
+  # - ELF1_d050
+  # - ELF1_d025
+  # - ELF1_d005
+  # - EF1a-KLF1_d100 
+  # - EF1a-KLF1_d075 
+  # - EF1a-KLF1_d050 
+  # - EF1a-KLF1_d025 
+  # - EF1a-KLF1_d005
+  # - OCT4_d100 
+  # - OCT4_d075 
+  # - OCT4_d050 
+  # - OCT4_d025 
+  # - OCT4_d005
+  # - KLF4_d100 
+  # - KLF4_d075 
+  # - KLF4_d050 
+  # - KLF4_d025 
+  # - KLF4_d005
+  # - SOX2_d100 
+  # - SOX2_d075 
+  # - SOX2_d050 
+  # - SOX2_d025 
+  # - SOX2_d005
+  # - ALX4_d100
+  # - ALX4_d075
+  # - ALX4_d050
+  # - ALX4_d025
+  # - ALX4_d005
+  # - IRF4_d100
+  # - IRF4_d075
+  # - IRF4_d050
+  # - IRF4_d025
+  # - IRF4_d005
+  # - LEF1_d100
+  # - LEF1_d075
+  # - LEF1_d050
+  # - LEF1_d025
+  # - LEF1_d005
+  # - TCF3_d100
+  # - TCF3_d075
+  # - TCF3_d050
+  # - TCF3_d025
+  # - TCF3_d005
+  - SP4_d100
+  - SP4_d075
+  - SP4_d050
+  - SP4_d025
+  - SP4_d005
+
+
+# max number of peaks per sample 
+#    sorted by macs2 score, 150k is the ArchR default threshold, 300k is the encode threshold
+CAP_MAX_PEAKS: 150000 
+
+# params for training bias model
+BIAS_CONDITION: "GFP_d100"
+BIAS_THRESH:
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  - 1.0
+  - 1.1
+
+# path to selected bias model
+BIAS_MODEL: "../../output/04-chrombpnet/output/model_bias/fold_0/HEK293T_GFP_d100_thresh0.8/models/bias.h5"
+#BIAS_MODEL: "../../output/04-chrombpnet/output/model_bias/ENCSR868FGK_bias_fold_0.h5"
+
+# peak set for calculating contribution scores
+CONTRIB_PEAKS: "../../output/02-atac/consensus_peaks_HEK293T_10col.bed"
+
+# merged modisco h5
+MERGED_MODISCO:
+  # SPI1: "../../output/02-atac/chrombp_marginalize/HEK293T_SPI1/modisco_compiled/modisco_compiled.h5"
+  # KLF1: "../../output/02-atac/chrombp_marginalize/HEK293T_KLF1/modisco_compiled/modisco_compiled.h5"
+  # ELF1: "../../output/02-atac/chrombp_marginalize/HEK293T_ELF1/modisco_compiled/modisco_compiled.h5"
+  # KLF4: "../../output/02-atac/chrombp_marginalize/HEK293T_KLF4/modisco_compiled/modisco_compiled.h5"
+  # ALX4: "../../output/02-atac/chrombp_marginalize/HEK293T_ALX4/modisco_compiled/modisco_compiled.h5"
+  # IRF4: "../../output/02-atac/chrombp_marginalize/HEK293T_IRF4/modisco_compiled/modisco_compiled.h5"
+  # LEF1: "../../output/02-atac/chrombp_marginalize/HEK293T_LEF1/modisco_compiled/modisco_compiled.h5"
+  # OCT4: "../../output/02-atac/chrombp_marginalize/HEK293T_OCT4/modisco_compiled/modisco_compiled.h5"
+  # SOX2: "../../output/02-atac/chrombp_marginalize/HEK293T_SOX2/modisco_compiled/modisco_compiled.h5"
+  SP4: "../../output/02-atac/chrombp_marginalize/HEK293T_SP4/modisco_compiled/modisco_compiled.h5"
+  # TCF3: "../../output/02-atac/chrombp_marginalize/HEK293T_TCF3/modisco_compiled/modisco_compiled.h5"

@@ -1,0 +1,28 @@
+# HEK293T H3K4me3 ChIP-seq
+https://www.encodeproject.org/files/ENCFF439DDQ/@@download/ENCFF439DDQ.bigWig
+https://www.encodeproject.org/files/ENCFF315TAU/@@download/ENCFF315TAU.bigWig
+https://www.encodeproject.org/files/ENCFF617NUV/@@download/ENCFF617NUV.bed.gz
+
+# HEK293T H3K36me3 ChIP-seq
+https://www.encodeproject.org/files/ENCFF185KBK/@@download/ENCFF185KBK.bigWig
+https://www.encodeproject.org/files/ENCFF714CDE/@@download/ENCFF714CDE.bigWig
+https://www.encodeproject.org/files/ENCFF655QDU/@@download/ENCFF655QDU.bed.gz
+
+https://www.encodeproject.org/files/ENCFF458PUF/@@download/ENCFF458PUF.bigWig
+https://www.encodeproject.org/files/ENCFF264PIM/@@download/ENCFF264PIM.bigWig
+https://www.encodeproject.org/files/ENCFF257ZFX/@@download/ENCFF257ZFX.bed.gz
+
+# HEK293T H3K9me3 ChIP-seq
+https://www.encodeproject.org/files/ENCFF526FQB/@@download/ENCFF526FQB.bigWig
+https://www.encodeproject.org/files/ENCFF758LNF/@@download/ENCFF758LNF.bigWig
+https://www.encodeproject.org/files/ENCFF899MET/@@download/ENCFF899MET.bed.gz
+
+# HEK293T H3K27ac ChIP-seq
+https://www.encodeproject.org/files/ENCFF885SUR/@@download/ENCFF885SUR.bigWig
+https://www.encodeproject.org/files/ENCFF157TGK/@@download/ENCFF157TGK.bigWig
+https://www.encodeproject.org/files/ENCFF225FPN/@@download/ENCFF225FPN.bed.gz
+
+# HEK293T H3K4me1 ChIP-seq
+https://www.encodeproject.org/files/ENCFF274LAP/@@download/ENCFF274LAP.bigWig
+https://www.encodeproject.org/files/ENCFF003LZR/@@download/ENCFF003LZR.bigWig
+https://www.encodeproject.org/files/ENCFF351MDO/@@download/ENCFF351MDO.bed.gz

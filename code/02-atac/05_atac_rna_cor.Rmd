@@ -1,0 +1,691 @@
+ATAC and RNA correlation
+
+## imports
+```{r}
+library(tidyverse)
+library(data.table)
+library(viridis)
+library(ggrastr)
+library(motifmatchr)
+library(ggpointdensity)
+```
+
+## Correlate by TF group vs GFP group
+```{r}
+meta <- read_tsv("../03-rna/rna_sample_sheet.txt")
+
+celltype <- "HEK293T"
+cond2 <- "GFP"
+log2fc.cutoff <- 0.58
+padj.cutoff <- 0.05
+
+atacdiff_dir <- "../../output/02-atac/04/deseq_data_TF/"
+rnadiff_dir <- paste0("../../output/03-rna/01/tf_group/", celltype)
+
+plotdir <- "../../plots/02-atac/05/tf_group"
+outdir <- "../../output/02-atac/05/tf_group"
+
+dir.create(plotdir, showWarnings = F, recursive = T)  
+dir.create(outdir, showWarnings = F, recursive = T)
+
+submeta <- meta[meta$CellType==celltype,]
+cond1_ls <- unique(submeta$TF)
+cond1_ls <- cond1_ls[cond1_ls != cond2]
+```
+
+```{r}
+cordf <- data.frame(row.names=cond1_ls, n_atac_diff_peaks=rep(0, length(cond1_ls)), n_rna_diff_genes=rep(0, length(cond1_ls)))
+
+for (cond1 in cond1_ls){
+  if (cond1 %in% c("EF1a-KLF1", "EF1a-SPI1", "tet-CTCF")){
+    namechange <- list("EF1a-KLF1"="KLF1", "EF1a-SPI1"="SPI1", "tet-CTCF"="tetCTCF")
+    ataccond1 <- namechange[cond1]
+  } else{
+    ataccond1 <- cond1
+  }
+  atacdiff <- fread(paste0(atacdiff_dir, "/deseq_", ataccond1, "_vs_", cond2, "_filteredConsensus_full.tsv"))
+  rnadiff <- readRDS(paste0(rnadiff_dir, "/deseq_dds_", gsub("-", ".", cond1), "_vs_", cond2, ".rds"))
+  
+  atacdiff_sig <- atacdiff %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  rnadiff_sig <- rnadiff %>% as.data.frame %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  
+  cordf[cond1, "n_atac_diff_peaks"] <- nrow(atacdiff_sig)
+  cordf[cond1, "n_atac_diff_peaks_up"] <- nrow(atacdiff_sig %>% dplyr::filter(log2FoldChange>0))
+  cordf[cond1, "n_atac_diff_peaks_down"] <- nrow(atacdiff_sig %>% dplyr::filter(log2FoldChange<0))
+  cordf[cond1, "n_rna_diff_genes"] <- nrow(rnadiff_sig)
+  cordf[cond1, "n_rna_diff_genes_up"] <- nrow(rnadiff_sig %>% dplyr::filter(log2FoldChange>0))
+  cordf[cond1, "n_rna_diff_genes_down"] <- nrow(rnadiff_sig %>% dplyr::filter(log2FoldChange<0))
+}
+
+colpal <- read_tsv("../utils/colpal_TF.tsv") %>% 
+  column_to_rownames(var="TF")
+
+cordf$TF <- row.names(cordf)
+cordf[cordf$TF=="EF1a-KLF1", "TF"] <- "KLF1"
+cordf[cordf$TF=="EF1a-SPI1", "TF"] <- "SPI1"
+cordf[cordf$TF=="tet-CTCF", "TF"] <- "tetCTCF"
+cordf$TF <- as.factor(cordf$TF)
+BL_stallion <- colpal[levels(cordf$TF),]
+  
+ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) + ggrepel::geom_label_repel(show.legend = F)
+ggsave(paste0(plotdir, "/atac_rna_ndiff_cor.pdf"), height=5, width=7)
+
+ggplot(cordf, aes(x=log10(n_atac_diff_peaks), y=log10(n_rna_diff_genes), col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) + ggrepel::geom_label_repel(show.legend = F, max.overlaps = 15)
+ggsave(paste0(plotdir, "/atac_rna_ndiff_cor_log10.pdf"), height=5, width=7)
+
+ggplot(cordf[cordf$TF!="tetCTCF",], aes(x=log10(n_atac_diff_peaks), y=log10(n_rna_diff_genes), col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) + ggrepel::geom_label_repel(show.legend = F, max.overlaps = 15)
+ggsave(paste0(plotdir, "/atac_rna_ndiff_cor_log10_notetctcf.pdf"), height=5, width=7)
+
+
+write.table(cordf, paste0(outdir, "/atac_rna_ndiff_cor.txt"), sep="\t", quote=F)
+
+cordf <- read.table(paste0(outdir, "/atac_rna_ndiff_cor.txt"), sep="\t")
+```
+### Plot a stacked bar plot to show TF group diff peaks/genes
+```{r}
+df_long <- tidyr::gather(cordf, key="atac_diffpeak_type", value="count", n_atac_diff_peaks_up, n_atac_diff_peaks_down)
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+                                               
+# Adjust the 'down' values to be negative
+df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"] <- -df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF, y=count, fill=atac_diffpeak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="ATAC Differential Peaks (Up and Down)",
+       y="Number of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/atac_ndiff_cor_updown_stacked_bar.pdf"), height=5, width=7)
+
+# rna 
+df_long <- tidyr::gather(cordf, key="rna_diffgene_type", value="count", n_rna_diff_genes_up, n_rna_diff_genes_down)
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::arrange(desc(n_rna_diff_genes_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+                                               
+# Adjust the 'down' values to be negative
+df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"] <- -df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF, y=count, fill=rna_diffgene_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="RNA Differential Genes (Up and Down)",
+       y="Number of Differential Genes", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/rna_ndiff_cor_updown_stacked_bar.pdf"), height=5, width=7)
+```
+
+### Correlation between ATAC log2fc and RNA log2fc (nearest gene) by group
+```{r}
+for (cond1 in cond1_ls){
+  message(cond1)
+  if (length(grep("EF1a|tet", cond1))==1){
+    ataccond1 <- gsub("EF1a-", "", cond1) %>% gsub("tet-", "tet", .)
+  } else{
+    ataccond1 <- cond1
+  }
+  atacdiff <- fread(Sys.glob(paste0(atacdiff_dir, "/deseq_*", ataccond1, "_vs_*", cond2, "_filteredConsensus_full.tsv")))
+  rnadiff <- readRDS(paste0(rnadiff_dir, "/deseq_dds_", gsub("-", ".", cond1), "_vs_", cond2, ".rds"))
+  
+  atacdiff_sig <- atacdiff %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  rnadiff_sig <- rnadiff %>% as.data.frame %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  
+  # find the nearest gene of each differential peak
+  atacdiff_sig <- atacdiff_sig %>% na.omit %>% dplyr::filter(gene_name %in% rnadiff$gene_name) # filter out any peaks with no matching nearest gene names in RNA data
+  
+  # collapse duplicate gene names in RNA table, sort by smallest padj then max log2fc then select the top match
+  rnadiff_filt <- rnadiff %>% na.omit %>% as.data.frame %>% dplyr::filter(gene_name!="") %>% 
+                  dplyr::group_by(gene_name) %>% dplyr::arrange(padj, desc(log2FoldChange)) %>% dplyr::slice(1)
+  colnames(rnadiff_filt) <- paste0("rna_", colnames(rnadiff_filt))
+  cat <- merge(atacdiff_sig, rnadiff_filt, all.x=T, by.x="gene_name", by.y="rna_gene_name")
+  cat$is_deg <- cat$gene_name %in% rnadiff_sig$gene_name
+  print(paste0(sum(cat$is_deg)/nrow(cat) * 100, " % of nearest genes near diff peaks are also diff genes"))
+  
+  write.table(cat, paste0(outdir, "/atac_rna_log2fc_cor_",cond1, "_vs_", cond2,".txt"), sep="\t", quote=F)
+
+  p1 <- ggplot(cat, aes(x=log2FoldChange, y=rna_log2FoldChange)) + rasterise(geom_point(size=0.3)) + 
+    xlab("Differential Peak ATAC Log2FC") + ylab("Nearest Gene RNA Log2FC ") + ggtitle(paste0(cond1, " vs ", cond2, "(n=", nrow(cat), ")"))
+  ggsave(paste0(plotdir, "/atac_rna_log2fc_cor_", cond1, "_vs_", cond2, ".pdf"), height=5, width=5)
+  
+}
+
+
+```
+### Correlation between RNA log2fc and ATAC log2fc (peaks within 10kb) by group
+
+```{r}
+for (cond1 in cond1_ls){
+  message(cond1)
+  if (length(grep("EF1a|tet", cond1))==1){
+    ataccond1 <- gsub("EF1a-", "", cond1) %>% gsub("tet-", "tet", .)
+  } else{
+    ataccond1 <- cond1
+  }
+  atacdiff <- fread(Sys.glob(paste0(atacdiff_dir, "/deseq_*", ataccond1, "_vs_*", cond2, "_filteredConsensus_full.tsv")))
+  rnadiff <- readRDS(paste0(rnadiff_dir, "/deseq_dds_", gsub("-", ".", cond1), "_vs_", cond2, ".rds"))
+
+  atacdiff_sig <- atacdiff %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  rnadiff_sig <- rnadiff %>% as.data.frame %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+
+  # find all peaks within 10kb of each differential gene
+  peaks_nearby <- atacdiff  %>% dplyr::filter((gene_name %in% rnadiff_sig$gene_name) & dist_to_tss<10000)
+
+  rnadiff_filt <- rnadiff_sig[rnadiff_sig$gene_name!="",]
+  colnames(rnadiff_filt) <- paste0("rna_", colnames(rnadiff_filt))
+  cat <- merge(peaks_nearby, rnadiff_filt, all.y=T, by.x="gene_name", by.y="rna_gene_name")
+  cat$is_deg <- cat$name %in% atacdiff_sig$name
+  print(paste0(sum(cat$is_deg)/nrow(cat) * 100, " % of peaks within 10kb of diff genes are also diff peaks"))
+
+  write.table(cat, paste0(outdir, "/atac_rna_log2fc_cor_peakswithin10kbdiffgenes_",cond1, "_vs_", cond2,".txt"), sep="\t", quote=F)
+  
+  # cat <- read.table(paste0(outdir, "/atac_rna_log2fc_cor_peakswithin10kbdiffgenes_",cond1, "_vs_", cond2,".txt"), sep="\t")
+  p1 <- ggplot(cat, aes(x=rna_log2FoldChange, y=log2FoldChange)) + rasterise(geom_point(size=0.3)) +
+    xlab("Differential Gene RNA Log2FC") + ylab("Nearby <10kb ATAC peaks Log2FC ") + ggtitle(paste0(cond1, " vs ", cond2, "(npeaks=", nrow(cat), ")"))
+  p2 <- ggplot(cat, aes(x=rna_log2FoldChange, y=log2FoldChange)) + rasterise(geom_pointdensity(size=0.3)) +
+    xlab("Differential Gene RNA Log2FC") + ylab("Nearby <10kb ATAC peaks Log2FC ") + ggtitle(paste0(cond1, " vs ", cond2, "(npeaks=", nrow(cat), ")")) + scale_color_viridis()
+  pdf(paste0(plotdir, "/atac_rna_log2fc_cor_peakswithin10kbdiffgenes_", cond1, "_vs_", cond2, ".pdf"), height=5, width=5)
+  print(p1)
+  print(p2)
+  dev.off()
+
+  # try summarize all peaks nearby each gene into a gene score
+  # formula from https://www.archrproject.com/bookdown/calculating-gene-scores-in-archr.html
+  cat$weighted_atac_log2fc <- (exp(-abs(cat$dist_to_tss)/5000) + exp(-1)) * cat$log2FoldChange
+  tmp <- cat %>% dplyr::group_by(gene_name) %>% dplyr::summarise(avg_weighted_atac_log2fc=mean(weighted_atac_log2fc), rna_log2FoldChange=mean(rna_log2FoldChange))
+  p3 <- ggplot(tmp, aes(x=rna_log2FoldChange, y=avg_weighted_atac_log2fc)) + rasterise(geom_point(size=0.3)) + 
+    xlab("Differential Gene RNA Log2FC") + ylab("Nearby <10kb ATAC peaks Mean Weighted Log2FC ") + ggtitle(paste0(cond1, " vs ", cond2, "(ngenes=", nrow(tmp), ")"))
+  p4 <- ggplot(tmp, aes(x=rna_log2FoldChange, y=avg_weighted_atac_log2fc)) + rasterise(geom_pointdensity(size=0.3)) + 
+    xlab("Differential Gene RNA Log2FC") + ylab("Nearby <10kb ATAC peaks Mean Weighted Log2FC ") + ggtitle(paste0(cond1, " vs ", cond2, "(ngenes=", nrow(tmp), ")")) + scale_color_viridis()
+  pdf(paste0(plotdir, "/atac_rna_log2fc_cor_peakswithin10kbdiffgenes_weighted_", cond1, "_vs_", cond2, ".pdf"), height=5, width=5)
+  print(p3)
+  print(p4)
+  dev.off()
+}
+
+
+```
+### % of diff peaks up/down that contain motif of interest
+```{r}
+motifs <- readRDS("../../output/02-atac/03/motif.scores.JASPAR2020.rds")
+motif_code_ls <- c(
+                   "ALX4"="MA0681.2_PHOX2B",
+                   "ELF1"="MA0473.3_ELF1",
+                   "IRF4"="MA1419.1_IRF4",
+                   "KLF1"="MA0039.4_KLF4",
+                   "KLF4"="MA0039.4_KLF4",
+                   "LEF1"="MA0768.1_LEF1",
+                   "NR4A1"="MA1112.2_NR4A1",
+                   "OCT4"="MA1115.1_POU5F1",
+                   "PRDM1"="MA0508.3_PRDM1",
+                   "SOX2"="MA0143.4_SOX2",
+                   "SP4"="MA0685.1_SP4",
+                   "SPI1"="MA0080.5_SPI1",
+                   "TCF3"="MA0522.3_TCF3",
+                   "MYC"="MA0059.1_MAX::MYC",
+                   "MXD1"="MA0059.1_MAX::MYC",
+                   "FOXO1"="MA0481.3_FOXP1", # no human FOXO1 motif
+                   "FOXP1"="MA0481.3_FOXP1",
+                   "FOXP3"="MA0850.1_FOXP3",
+                   "GATA1"="MA0140.2_GATA1::TAL1",
+                   "BACH2"="MA1101.2_BACH2",
+                   "IKZF2"="MA1508.1_IKZF1",
+                   "XBP1"="MA0844.1_XBP1")
+
+cond1_ls <- cond1_ls[grep(paste0(names(motif_code_ls), collapse="|"), cond1_ls)]
+
+out <- list()
+for (cond1 in cond1_ls){
+  message(cond1)
+  if (length(grep("EF1a|tet", cond1))==1){
+    ataccond1 <- gsub("EF1a-", "", cond1) %>% gsub("tet-", "tet", .)
+  } else{
+    ataccond1 <- cond1
+  }
+  submotifs <- motifs[,motif_code_ls[ataccond1]]
+  submotifs <- submotifs[motifMatches(submotifs) %>% as.list %>% unlist ==TRUE,]
+  
+  df <- fread(Sys.glob(paste0(atacdiff_dir, "/deseq_*", ataccond1, "_vs_*", cond2, "_filteredConsensus_full.tsv")))
+  up <- df %>% dplyr::filter(padj<=padj.cutoff & log2FoldChange>=log2fc.cutoff)
+  down <- df %>% dplyr::filter(padj<=padj.cutoff & log2FoldChange<=-log2fc.cutoff)
+  out[[cond1]] <- data.frame(npeak=c(nrow(up), nrow(down)),
+            npeak_contain_motif_of_interest=c(sum(up$name %in% rownames(submotifs)), sum(down$name %in% rownames(submotifs))),
+            peak_type=c("up", "down"),
+            tf = c(cond1, cond1))
+}
+out <- do.call(rbind, out)
+out$tf[out$tf=="EF1a-SPI1"] <- "SPI1"
+out$tf[out$tf=="EF1a-KLF1"] <- "KLF1"
+out <- out %>% as.data.frame %>% dplyr::mutate(pct_withmotif=npeak_contain_motif_of_interest/npeak)
+write.table(out, paste0(outdir, "/atac_diffpeak_pctwithmotif_allcond.txt"), sep="\t", quote=F)
+
+out <- read.table(paste0(outdir, "/atac_diffpeak_pctwithmotif_allcond.txt"), sep="\t")
+out[out$peak_type=="down", "pct_withmotif"] <- -out[out$peak_type=="down", "pct_withmotif"]
+ranked_tf <- cordf %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character
+ranked_tf <- ranked_tf[ranked_tf != "tetCTCF"]
+out$tf <- factor(out$tf, levels=ranked_tf)
+
+# plot a stacked bar plot 
+ggplot(out, aes(x=tf, y=pct_withmotif*100, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="% of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="% of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/atac_diffpeak_pctwithmotif_stacked_bar.pdf"), height=5, width=7)
+```
+
+### absolute # of peaks containing motifs
+```{r}
+# out["log10_npeak_contain_motif_of_interest"] <- log10(out["npeak_contain_motif_of_interest"])
+out[out$peak_type=="down", "npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "npeak_contain_motif_of_interest"]
+# out[out$peak_type=="down", "log10_npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "log10_npeak_contain_motif_of_interest"]
+
+p1 <- ggplot(out, aes(x=tf, y=npeak_contain_motif_of_interest, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="# of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+p1
+ggsave(paste0(plotdir, "/atac_diffpeak_numwithmotif_stacked_bar.pdf"), height=5, width=7)
+# # the log plot looks funky especially for small values, don't use
+# p2 <- ggplot(out, aes(x=tf, y=log10_npeak_contain_motif_of_interest, fill=peak_type)) +
+#   geom_bar(stat="identity") +
+#   geom_hline(yintercept=0, color="black", linewidth=0.8) +
+#   scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+#   labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+#        y="# of Differential Peaks", x="Transcription Factors") +
+#   theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+
+```
+
+
+## Correlation at each dosage
+```{r}
+celltype <- "HEK293T"
+cond2 <- "GFP_1"
+log2fc.cutoff <- 0.58
+padj.cutoff <- 0.05
+
+atacdiff_dir <- "../../output/02-atac/04/deseq_data_Plate_TF_Dose/"
+rnadiff_dir <- paste0("../../output/03-rna/01/tf_group/", celltype)
+
+plotdir <- "../../plots/02-atac/05/tf_dose"
+outdir <- "../../output/02-atac/05/tf_dose"
+
+dir.create(plotdir, showWarnings = F, recursive = T)  
+dir.create(outdir, showWarnings = F, recursive = T)
+
+submeta <- meta[meta$CellType==celltype,]
+cond1_ls <- unique(submeta$TF_Dose)
+cond1_ls <- cond1_ls[cond1_ls != cond2]
+
+cordf <- data.frame(row.names=cond1_ls, n_atac_diff_peaks=rep(0, length(cond1_ls)), n_rna_diff_genes=rep(0, length(cond1_ls)))
+
+for (cond1 in cond1_ls){
+  message(cond1)
+  if (length(grep("EF1a|tet", cond1))==1){
+    ataccond1 <- gsub("EF1a-", "", cond1) %>% gsub("tet-", "tet", .)
+  } else{
+    ataccond1 <- cond1
+  }
+  atacdiff <- fread(Sys.glob(paste0(atacdiff_dir, "/deseq_*", ataccond1, "_vs_*", cond2, "_filteredConsensus_full.tsv")))
+  rnadiff <- readRDS(paste0(rnadiff_dir, "/deseq_dds_", gsub("-", ".", cond1), "_vs_", cond2, ".rds"))
+  
+  atacdiff_sig <- atacdiff %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  rnadiff_sig <- rnadiff %>% as.data.frame %>% dplyr::filter(padj<=padj.cutoff & abs(log2FoldChange)>=log2fc.cutoff)
+  
+  cordf[cond1, "n_atac_diff_peaks"] <- nrow(atacdiff_sig)
+  cordf[cond1, "n_atac_diff_peaks_up"] <- nrow(atacdiff_sig %>% dplyr::filter(log2FoldChange>0))
+  cordf[cond1, "n_atac_diff_peaks_down"] <- nrow(atacdiff_sig %>% dplyr::filter(log2FoldChange<0))
+  cordf[cond1, "n_rna_diff_genes"] <- nrow(rnadiff_sig)
+  cordf[cond1, "n_rna_diff_genes_up"] <- nrow(rnadiff_sig %>% dplyr::filter(log2FoldChange>0))
+  cordf[cond1, "n_rna_diff_genes_down"] <- nrow(rnadiff_sig %>% dplyr::filter(log2FoldChange<0))
+}
+
+
+cordf$TF_Dose <- row.names(cordf)
+cordf$TF <- str_split(cordf$TF_Dose, "_", simplify=T)[,1]
+cordf[cordf$TF=="EF1a-KLF1", "TF"] <- "KLF1"
+cordf[cordf$TF=="EF1a-SPI1", "TF"] <- "SPI1"
+cordf[cordf$TF=="tet-CTCF", "TF"] <- "tetCTCF"
+cordf$TF <- as.factor(cordf$TF)
+BL_stallion <- colpal[levels(cordf$TF),]
+cordf$Plasmid_Dose <- str_split(cordf$TF_Dose, "_", simplify=T)[,2] %>% as.character
+
+write.table(cordf, paste0(outdir, "/atac_rna_ndiff_cor_tf_dose.txt"), sep="\t", quote=F)
+
+p1 <- ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) + ggrepel::geom_label_repel(show.legend = F)
+p2 <- ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=Plasmid_Dose, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) 
+p3 <- ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=TF, label=TF)) + geom_point(aes(shape=Plasmid_Dose)) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) 
+p4 <- ggplot(cordf, aes(x=log10(n_atac_diff_peaks+1), y=log10(n_rna_diff_genes+1), col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) 
+p5 <- ggplot(cordf[cordf$TF!="tetCTCF",], aes(x=log10(n_atac_diff_peaks+1), y=log10(n_rna_diff_genes+1), col=TF, label=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) 
+p6 <- ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=TF)) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_manual(values=BL_stallion) + facet_wrap(~Plasmid_Dose) + theme(axis.text.x = element_text(angle = 90))
+p7 <- ggplot(cordf, aes(x=n_atac_diff_peaks, y=n_rna_diff_genes, col=as.numeric(Plasmid_Dose))) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_viridis() + facet_wrap(~TF) + theme(axis.text.x = element_text(angle = 90))
+p8 <- ggplot(cordf, aes(x=log10(n_atac_diff_peaks+1), y=log10(n_rna_diff_genes+1), col=as.numeric(Plasmid_Dose))) + geom_point(size=0.3) + 
+  theme_classic() + scale_color_viridis() + facet_wrap(~TF) + theme(axis.text.x = element_text(angle = 90))
+
+
+pdf(paste0(plotdir, "/atac_rna_ndiff_cor_tf_dose.pdf"), height=5, width=7)
+p1
+p2
+p3
+p4
+p5
+p6
+p7
+p8
+dev.off()
+
+
+
+```
+```{r}
+cordf <- read.table(paste0(outdir, "/atac_rna_ndiff_cor_tf_dose.txt"), sep="\t")
+head(cordf)
+```
+
+### Plot a stacked bar plot to show TF dose diff peaks/genes
+```{r}
+df_long <- tidyr::gather(cordf, key="atac_diffpeak_type", value="count", n_atac_diff_peaks_up, n_atac_diff_peaks_down)
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::filter(Plasmid_Dose=="1") %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+df_long$Plasmid_Dose <- factor(df_long$Plasmid_Dose, levels=c("1", "0.75", "0.5", "0.25", "0.05"))
+df_long$log10count <- log10(df_long$count+1)
+
+# sort TF Dose 
+df_long$TF_Dose <- paste0(df_long$TF, "_", df_long$Plasmid_Dose)
+TF_Dose_level <- lapply(levels(df_long$TF), function(tf){lapply(levels(df_long$Plasmid_Dose), function(n){paste0(tf, "_", n)}) %>% unlist}) %>% unlist
+TF_Dose_level <- TF_Dose_level[TF_Dose_level %in% df_long$TF_Dose]
+df_long$TF_Dose <- factor(df_long$TF_Dose, levels=TF_Dose_level)
+
+# Adjust the 'down' values to be negative
+df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"] <- -df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"]
+df_long$log10count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"] <- -df_long$log10count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF_Dose, y=count, fill=atac_diffpeak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="ATAC Differential Peaks (Up and Down)",
+       y="Number of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1, size=5))
+
+ggsave(paste0(plotdir, "/atac_ndiff_cor_updown_stacked_bar.pdf"), height=5, width=10)
+
+# log y 
+ggplot(df_long, aes(x=TF_Dose, y=log10count, fill=atac_diffpeak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="ATAC Differential Peaks (Up and Down)",
+       y="Log10(Number of Differential Peaks + 1)", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1, size=5))
+
+ggsave(paste0(plotdir, "/atac_ndiff_cor_updown_stacked_bar_logged.pdf"), height=5, width=10)
+
+
+# rna 
+df_long <- tidyr::gather(cordf, key="rna_diffgene_type", value="count", n_rna_diff_genes_up, n_rna_diff_genes_down)
+## sort by RNA diff genes at highest dose
+# df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::filter(Plasmid_Dose=="1") %>% dplyr::arrange(desc(n_rna_diff_genes_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+# or sorted by ATAC diff peak num at highest dose
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::filter(Plasmid_Dose=="1") %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+df_long$Plasmid_Dose <- factor(df_long$Plasmid_Dose, levels=c("1", "0.75", "0.5", "0.25", "0.05"))
+df_long$log10count <- log10(df_long$count+1)
+
+# sort TF Dose 
+df_long$TF_Dose <- paste0(df_long$TF, "_", df_long$Plasmid_Dose)
+TF_Dose_level <- lapply(levels(df_long$TF), function(tf){lapply(levels(df_long$Plasmid_Dose), function(n){paste0(tf, "_", n)}) %>% unlist}) %>% unlist
+TF_Dose_level <- TF_Dose_level[TF_Dose_level %in% df_long$TF_Dose]
+df_long$TF_Dose <- factor(df_long$TF_Dose, levels=TF_Dose_level)
+
+# Adjust the 'down' values to be negative
+df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"] <- -df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"]
+df_long$log10count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"] <- -df_long$log10count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF_Dose, y=count, fill=rna_diffgene_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="RNA Differential Genes (Up and Down)",
+       y="Number of Differential Genes", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1, size=5))
+
+ggsave(paste0(plotdir, "/rna_ndiff_cor_updown_stacked_bar.pdf"), height=5, width=10)
+
+# log y 
+ggplot(df_long, aes(x=TF_Dose, y=log10count, fill=rna_diffgene_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="RNA Differential Genes (Up and Down)",
+       y="Log10(Number of Differential Genes + 1)", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1, size=5))
+
+ggsave(paste0(plotdir, "/rna_ndiff_cor_updown_stacked_bar_logged.pdf"), height=5, width=10)
+
+```
+### % of diff peaks up/down that contain motif of interest
+```{r}
+
+celltype <- "HEK293T"
+cond2 <- "GFP_1"
+log2fc.cutoff <- 0.58
+padj.cutoff <- 0.05
+
+atacdiff_dir <- "../../output/02-atac/04/deseq_data_Plate_TF_Dose/"
+
+plotdir <- "../../plots/02-atac/05/tf_dose"
+outdir <- "../../output/02-atac/05/tf_dose"
+
+submeta <- meta[meta$CellType==celltype,]
+cond1_ls <- unique(submeta$TF_Dose)
+cond1_ls <- cond1_ls[cond1_ls != cond2]
+
+cond1_ls <- cond1_ls[grep(paste0(names(motif_code_ls), collapse="|"), cond1_ls)]
+
+out <- list()
+for (cond1 in cond1_ls){
+  message(cond1)
+  if (length(grep("EF1a|tet", cond1))==1){
+    ataccond1 <- gsub("EF1a-", "", cond1) %>% gsub("tet-", "tet", .)
+  } else{
+    ataccond1 <- cond1
+  }
+  submotifs <- motifs[,motif_code_ls[str_split(ataccond1, "_", simplify=T)[1]]]
+  submotifs <- submotifs[motifMatches(submotifs) %>% as.list %>% unlist ==TRUE,]
+  
+  df <- fread(Sys.glob(paste0(atacdiff_dir, "/deseq_*", ataccond1, "_vs_*", cond2, "_filteredConsensus_full.tsv")))
+  up <- df %>% dplyr::filter(padj<=padj.cutoff & log2FoldChange>=log2fc.cutoff)
+  down <- df %>% dplyr::filter(padj<=padj.cutoff & log2FoldChange<=-log2fc.cutoff)
+  out[[cond1]] <- data.frame(npeak=c(nrow(up), nrow(down)),
+            npeak_contain_motif_of_interest=c(sum(up$name %in% rownames(submotifs)), sum(down$name %in% rownames(submotifs))),
+            peak_type=c("up", "down"),
+            tf_dose = c(cond1, cond1))
+}
+
+out <- do.call(rbind, out)
+out <- out %>% as.data.frame %>% dplyr::mutate(pct_withmotif=npeak_contain_motif_of_interest/npeak)
+write.table(out, paste0(outdir, "/atac_diffpeak_pctwithmotif_allcond.txt"), sep="\t", quote=F)
+
+out[out$peak_type=="down", "pct_withmotif"] <- -out[out$peak_type=="down", "pct_withmotif"]
+
+# sort TF Dose 
+out$TF <- str_split(out$tf_dose, "_", simplify=T)[,1]
+out[out$TF=="EF1a-KLF1", "TF"] <- "KLF1"
+out[out$TF=="EF1a-SPI1", "TF"] <- "SPI1"
+out[out$TF=="tet-CTCF", "TF"] <- "tetCTCF"
+
+out$Plasmid_Dose <- factor(str_split(out$tf_dose, "_", simplify=T)[,2], levels=c("1", "0.75", "0.5", "0.25", "0.05"))
+out$TF <- factor(out$TF, levels= out %>% dplyr::filter((Plasmid_Dose=="1") & (peak_type=="up")) %>% dplyr::arrange(desc(npeak)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+out$TF_Dose <- paste0(out$TF, "_", out$Plasmid_Dose)
+TF_Dose_level <- lapply(levels(out$TF), function(tf){lapply(levels(out$Plasmid_Dose), function(n){paste0(tf, "_", n)}) %>% unlist}) %>% unlist
+TF_Dose_level <- TF_Dose_level[TF_Dose_level %in% out$TF_Dose]
+out$TF_Dose <- factor(out$TF_Dose, levels=TF_Dose_level)
+
+# plot a stacked bar plot 
+ggplot(out, aes(x=TF_Dose, y=pct_withmotif*100, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="% of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="% of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/atac_diffpeak_pctwithmotif_stacked_bar.pdf"), height=5, width=10)
+
+```
+### absolute # of peaks w/ motif
+```{r}
+out[out$peak_type=="down", "npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "npeak_contain_motif_of_interest"]
+
+p1 <- ggplot(out, aes(x=TF_Dose, y=npeak_contain_motif_of_interest, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="# of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+p1
+ggsave(paste0(plotdir, "/atac_diffpeak_numwithmotif_stacked_bar.pdf"), height=5, width=10)
+```
+
+## Highest dose only
+
+```{r}
+plotdir <- "../../plots/02-atac/05/tf_dose"
+outdir <- "../../output/02-atac/05/tf_dose"
+
+cordf <- read.table(paste0(outdir, "/atac_rna_ndiff_cor_tf_dose.txt"), sep="\t")
+```
+
+### stacked bar plot
+```{r}
+cordf <- cordf %>% dplyr::filter((Plasmid_Dose==1) & (TF!="tetCTCF"))
+
+df_long <- tidyr::gather(cordf, key="atac_diffpeak_type", value="count", n_atac_diff_peaks_up, n_atac_diff_peaks_down)
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+                                               
+# Adjust the 'down' values to be negative
+df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"] <- -df_long$count[df_long$atac_diffpeak_type == "n_atac_diff_peaks_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF, y=count, fill=atac_diffpeak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="ATAC Differential Peaks (Up and Down)",
+       y="Number of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/atac_ndiff_cor_updown_stacked_bar_highestdose.pdf"), height=5, width=7)
+
+# rna 
+df_long <- tidyr::gather(cordf, key="rna_diffgene_type", value="count", n_rna_diff_genes_up, n_rna_diff_genes_down)
+# df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::arrange(desc(n_rna_diff_genes_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+# or sorted by ATAC diff peak num at highest dose
+df_long$TF <- factor(df_long$TF, levels= cordf %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character)
+                                               
+# Adjust the 'down' values to be negative
+df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"] <- -df_long$count[df_long$rna_diffgene_type == "n_rna_diff_genes_down"]
+
+# Plot using ggplot
+ggplot(df_long, aes(x=TF, y=count, fill=rna_diffgene_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="RNA Differential Genes (Up and Down)",
+       y="Number of Differential Genes", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/rna_ndiff_cor_updown_stacked_bar_highestdose.pdf"), height=5, width=7)
+```
+
+### % of diff peaks w/ motif of interest
+```{r}
+out <- read.table(paste0(outdir, "/atac_diffpeak_pctwithmotif_allcond.txt"), sep="\t")
+out[c("tf", "dose")] <- str_split(out$tf_dose, "_", simplify=T)
+out[out$tf=="EF1a-KLF1", "tf"] <- "KLF1"
+out[out$tf=="EF1a-SPI1", "tf"] <- "SPI1"
+out <- out %>% dplyr::filter(dose==1)
+
+out[out$peak_type=="down", "pct_withmotif"] <- -out[out$peak_type=="down", "pct_withmotif"]
+ranked_tf <- cordf %>% dplyr::arrange(desc(n_atac_diff_peaks_up)) %>% dplyr::select(TF) %>% unlist %>% as.character
+ranked_tf <- ranked_tf[ranked_tf != "tetCTCF"]
+out$tf <- factor(out$tf, levels=ranked_tf)
+
+# plot a stacked bar plot 
+ggplot(out, aes(x=tf, y=pct_withmotif*100, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="% of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="% of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+ggsave(paste0(plotdir, "/atac_diffpeak_pctwithmotif_stacked_bar_highestdose.pdf"), height=5, width=7)
+```
+
+### absolute # of peaks w/ motif
+```{r}
+out[out$peak_type=="down", "npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "npeak_contain_motif_of_interest"]
+
+p1 <- ggplot(out, aes(x=tf, y=npeak_contain_motif_of_interest, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="# of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+p1
+ggsave(paste0(plotdir, "/atac_diffpeak_numwithmotif_stacked_bar_highestdose.pdf"), height=5, width=7)
+```
+
+
+also plot the absolute number of peaks containing motifs
+```{r}
+# out["log10_npeak_contain_motif_of_interest"] <- log10(out["npeak_contain_motif_of_interest"])
+out[out$peak_type=="down", "npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "npeak_contain_motif_of_interest"]
+# out[out$peak_type=="down", "log10_npeak_contain_motif_of_interest"] <- -out[out$peak_type=="down", "log10_npeak_contain_motif_of_interest"]
+
+p1 <- ggplot(out, aes(x=tf, y=npeak_contain_motif_of_interest, fill=peak_type)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="black", linewidth=0.8) +
+  scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+  labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+       y="# of Differential Peaks", x="Transcription Factors") +
+  theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+p1
+ggsave(paste0(plotdir, "/atac_diffpeak_numwithmotif_stacked_bar.pdf"), height=5, width=7)
+# # the log plot looks funky especially for small values, don't use
+# p2 <- ggplot(out, aes(x=tf, y=log10_npeak_contain_motif_of_interest, fill=peak_type)) +
+#   geom_bar(stat="identity") +
+#   geom_hline(yintercept=0, color="black", linewidth=0.8) +
+#   scale_fill_manual(values=c("#1465AC", "#B31B21")) +
+#   labs(title="# of ATAC Differential Peaks Containing Motif of Interest (Up and Down)",
+#        y="# of Differential Peaks", x="Transcription Factors") +
+#   theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1))
+
+
+```
+

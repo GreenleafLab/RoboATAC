@@ -1,0 +1,532 @@
+# imports
+import glob
+import os
+
+# calculate variables based on input
+
+def get_sample_peaks(DIR, CELLTYPE, CONDITION=""):
+    pattern = f"{DIR}/{CELLTYPE}*{CONDITION}*.narrowPeak"
+    return [os.path.basename(p) for p in glob.glob(pattern)]
+
+def get_sample_bams(DIR, CELLTYPE, CONDITION=""):
+    pattern = f"{DIR}/{CELLTYPE}*{CONDITION}*.noMT.filtered.deduped.bam"
+    return [os.path.basename(p) for p in glob.glob(pattern)]
+
+workdir: config["BASE_DIR"]
+
+rule all:
+    localrule: True
+    input:
+        ## preparing inputs only
+        expand("input/merged_narrowpeaks/{CELLTYPE}_{condition}.merged.narrowPeak", CELLTYPE=config['CELLTYPE'], condition=config["CONDITION"]),
+        expand("input/merged_bams/" + config['CELLTYPE'] + "_{condition}.rep_combined.sorted.noMT.filtered.deduped.bam", condition=config["CONDITION"]),
+        expand("input/nonpeaks/fold_{fold}/" + config['CELLTYPE'] + "_{condition}_negatives.bed", fold=config['FOLD'].keys(), condition=config["CONDITION"]),       
+        ## training bias model only
+        #expand("output/model_bias/fold_{fold}/" + config["CELLTYPE"] + "_{condition}_thresh{thresh}/", fold="0", condition=config["BIAS_CONDITION"], thresh=config["BIAS_THRESH"]),       
+        ## training chrombpnet model
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        ## interpret 
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/interpret_counts/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/interpret_counts_samplepeaks/{CELLTYPE}_{condition}.counts_scores.bw", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        #expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/interpret_profile/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        ## modisco
+        #expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/modisco_counts/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/modisco_counts_samplepeaks/{CELLTYPE}_{condition}_modisco.h5", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        #expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/modisco_profile/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        ## predict
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/pred_counts/", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"]),
+        ## hit calling
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/finemo_out/{motifset}/report", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"], motifset=config["MERGED_MODISCO"].keys()),
+        expand("output/models/fold_{fold}/{CELLTYPE}_{condition}/finemo_out/{motifset}/hits.bed.gz", CELLTYPE=config["CELLTYPE"], fold=config['FOLD'].keys(), condition=config["CONDITION"], motifset=config["MERGED_MODISCO"].keys()),
+
+rule get_ref:
+    localrule: True
+    benchmark:
+        "benchmarks/get_ref/get_ref.tsv"
+    params:
+        genome_gz=f"{config['RESOURCE_DIR']}/hg38.fa.gz",
+        blacklist_gz=f"{config['RESOURCE_DIR']}/blacklist.bed.gz"
+    output:
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+        blacklist=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['BLACKLIST']}"
+    shell:
+        """
+        wget https://www.encodeproject.org/files/GRCh38_no_alt_analysis_set_GCA_000001405.15/@@download/GRCh38_no_alt_analysis_set_GCA_000001405.15.fasta.gz -O {params.genome_gz};
+        wget https://www.encodeproject.org/files/GRCh38_EBV.chrom.sizes/@@download/GRCh38_EBV.chrom.sizes.tsv -O {output.chromsize};
+        wget https://www.encodeproject.org/files/ENCFF356LFX/@@download/ENCFF356LFX.bed.gz -O {params.blacklist_gz};
+        gzip -d {params.genome_gz};
+        gzip -d {params.blacklist_gz}
+        """
+
+rule cap_peaks:
+    localrule: True
+    benchmark:
+        "benchmarks/cap_peaks/{sample}.tsv"
+    input:
+        peak=config["INPUT_PEAK_DIR"] + "/{sample}"
+    output:
+        peak="input/cap_peaks/{sample}.cap"
+    params:
+        cap_num=config["CAP_MAX_PEAKS"]
+    shell:
+        "cat {input.peak} | sort -k5,5nr | awk 'NR <= {params.cap_num}' > {output.peak}"
+
+rule merge_reps_peaks:
+    benchmark:
+        "benchmarks/merge_reps_peaks/" + config['CELLTYPE'] + "_{condition}.tsv"
+    input:
+        peak=lambda w: expand(rules.cap_peaks.output.peak, sample=get_sample_peaks(config["INPUT_PEAK_DIR"], config["CELLTYPE"], CONDITION=w.condition)),
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}"
+    output:
+        "input/merged_narrowpeaks/" + config['CELLTYPE'] + "_{condition}.merged.narrowPeak"
+    shell:
+        """
+        cat {input.peak} | 
+        bedtools sort | 
+        bedtools merge | 
+        awk -v OFS='\t' '{{mid=int(($3+$2)/2); print $1,mid,mid+1,".",".",".",".",".",".",250}}' | 
+        bedtools slop -b 250 -g {input.chromsize} | 
+        bedtools sort > {output}
+        """
+
+rule merge_reps_bams:
+    benchmark:
+        "benchmarks/merge_reps_bams/" + config['CELLTYPE'] + "_{condition}.tsv"
+    input:
+        lambda w: expand(config["INPUT_BAM_DIR"] + "/{bam}", bam=get_sample_bams(config["INPUT_BAM_DIR"], config["CELLTYPE"], CONDITION=w.condition))
+    output:
+        "input/merged_bams/" + config['CELLTYPE'] + "_{condition}.rep_combined.sorted.noMT.filtered.deduped.bam"
+    shell:
+        "samtools merge -o {output} {input}"
+
+rule make_nonpeaks:
+    benchmark:
+        "benchmarks/make_nonpeaks/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    input:
+        peak=rules.merge_reps_peaks.output,
+        split=lambda w: f"{config['FOLD_DIR']}/{config['FOLD'][w.fold]}",
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+        blacklist=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['BLACKLIST']}"
+    output:
+        aux=directory("input/nonpeaks/fold_{fold}/" + config['CELLTYPE'] + "_{condition}_auxiliary"),
+        bed="input/nonpeaks/fold_{fold}/" + config['CELLTYPE'] + "_{condition}_negatives.bed"
+    params:
+        out_prefix=lambda w: f"input/nonpeaks/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        {params.script} chrombpnet prep nonpeaks \
+        -g {input.genome} \
+        -p {input.peak} \
+        -c {input.chromsize} \
+        -br {input.blacklist} \
+        -fl {input.split} \
+        -o {params.out_prefix}
+        """
+
+rule model_bias:
+    benchmark:
+        "benchmarks/model_bias/fold_{fold}_" + config['CELLTYPE'] + "_{condition}_thresh{thresh}.tsv"
+    threads: 8
+    resources:
+        mem_mb=64000,
+        gpus=1,
+        runtime=1440 #24h
+    input:
+        bam=rules.merge_reps_bams.output,
+        peak=rules.merge_reps_peaks.output,
+        nonpeak=rules.make_nonpeaks.output.bed,
+        split=lambda w: f"{config['FOLD_DIR']}/{config['FOLD'][w.fold]}",
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+        blacklist=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['BLACKLIST']}"
+    output:
+        directory("output/model_bias/fold_{fold}/" + config["CELLTYPE"] + "_{condition}_thresh{thresh}/")
+    params:
+        assay="ATAC",
+        thresh=lambda w: w.thresh,
+        script="./setup_environment.sh"
+    shell:
+        """
+        {params.script} chrombpnet bias pipeline \
+        -ibam {input.bam} \
+        -d {params.assay} \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -p {input.peak} \
+        -n {input.nonpeak} \
+        -fl {input.split} \
+        -b {params.thresh} \
+        -o {output} 
+        """
+
+rule model_train:
+    benchmark:
+        "benchmarks/model_train/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=64000,
+        gpus=1,
+        runtime=1440, #24h
+        partition="wjg,sfgf,biochem,gpu,owners"
+    input:
+        bam=rules.merge_reps_bams.output,
+        peak=rules.merge_reps_peaks.output,
+        nonpeak=rules.make_nonpeaks.output.bed,
+        split=lambda w: f"{config['FOLD_DIR']}/{config['FOLD'][w.fold]}",
+        bias=config['BIAS_MODEL'],
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+        blacklist=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['BLACKLIST']}"
+    output:
+        auxiliary=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/auxiliary"),
+        evaluation=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/evaluation"),
+        logs=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/logs"),
+        # using "directory" to prevent snakemake from automatically creating the models/ folder in the beginning which will cause a chrombpnet error
+        models=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/models"), 
+        success="output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/success.txt", # adding this to indicate end of process for subsequent rules that depend on this rule since output is a folder here
+    params:
+        assay="ATAC",
+        script="./setup_environment.sh",
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/")
+    shell:
+        """
+        mkdir -p {params.folder}; 
+        {params.script} chrombpnet pipeline \
+        -ibam {input.bam} \
+        -d {params.assay} \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -p {input.peak} \
+        -n {input.nonpeak} \
+        -fl {input.split} \
+        -b {input.bias} \
+        -o {params.folder};
+        touch {output.success}
+        """
+
+rule model_shap:
+    benchmark:
+        "benchmarks/model_shap/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=150000,
+        gpus=1,
+        #runtime=2880, #48h
+        #partition="wjg,sfgf,biochem,gpu,owners"
+        #partition="wjg,sfgf,biochem,gpu"
+        runtime=7200, #5d
+        partition="wjg,sfgf" # partitions that allow longer than 2 days and have gpus
+    input:
+        success=rules.model_train.output.success,
+        peak_set=config["CONTRIB_PEAKS"],
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_counts/"),
+        success="output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/.shapsuccess",
+    params:
+        no_bias_model=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/models/chrombpnet_nobias.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_counts/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} chrombpnet contribs_bw \
+        -m {params.no_bias_model} \
+        -r {input.peak_set} \
+        -pc counts \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -op {params.out_prefix};
+        touch {output.success}
+        """
+
+rule model_shap_profile:
+    benchmark:
+        "benchmarks/model_shap_profile/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=150000,
+        gpus=1,
+        #runtime=2880, #48h
+        #partition="wjg,sfgf,biochem,gpu,owners"
+        #partition="wjg,sfgf,biochem,gpu"
+        runtime=7200, #5d
+        partition="wjg,sfgf" # partitions that allow longer than 2 days and have gpus
+    input:
+        success=rules.model_train.output.success,
+        peak_set=config["CONTRIB_PEAKS"],
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_profile/"),
+        success="output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/.shapprofilesuccess",
+    params:
+        no_bias_model=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/models/chrombpnet_nobias.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_profile/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} chrombpnet contribs_bw \
+        -m {params.no_bias_model} \
+        -r {input.peak_set} \
+        -pc profile \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -op {params.out_prefix};
+        touch {output.success}
+        """
+
+rule model_shap_samplepeaks:
+    benchmark:
+        "benchmarks/model_shap_samplepeaks/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 24
+    resources:
+        mem_mb=120000,
+        gpus=1,
+        runtime=2880, #48h
+        partition="wjg,sfgf,biochem,gpu,owners"
+        #partition="wjg,sfgf,biochem,gpu"
+        #runtime=7200, #5d
+        #partition="wjg,sfgf" # partitions that allow longer than 2 days and have gpus
+    input:
+        success=rules.model_train.output.success,
+        peak_set=rules.merge_reps_peaks.output,
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+    output: # trying explicitly defining the outputs instead of a directory output
+        bw = "output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}.counts_scores.bw",
+        h5 = "output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}.counts_scores.h5",
+        args = "output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}.interpret.args.json",
+        regions = "output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/interpret_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}.interpreted_regions.bed",
+    params:
+        no_bias_model=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/models/chrombpnet_nobias.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_counts_samplepeaks/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        {params.script} chrombpnet contribs_bw \
+        -m {params.no_bias_model} \
+        -r {input.peak_set} \
+        -pc counts \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -op {params.out_prefix}
+        """
+
+rule model_modisco:
+    benchmark:
+        "benchmarks/model_modisco/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=64000,
+        gpus=0,
+        runtime=1440 #24h
+    input:
+        success=rules.model_shap.output.success,
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/modisco_counts/")
+    params:
+        count_scores=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_counts/{config['CELLTYPE']}_{w.condition}.counts_scores.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/modisco_counts/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} chrombpnet modisco_motifs \
+        -i {params.count_scores} \
+        -op {params.out_prefix} \
+        -n 50000
+        """
+
+rule model_modisco_samplepeaks:
+    benchmark:
+        "benchmarks/model_modisco_samplepeaks/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 24
+    resources:
+        mem_mb=100000,
+        gpus=0,
+        runtime=4320, #72h
+        partition="wjg,sfgf,biochem"
+    input:
+        count_scores=rules.model_shap_samplepeaks.output.h5,
+    output:
+        reports_folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/modisco_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}_reports"),
+        h5="output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/modisco_counts_samplepeaks/" + config["CELLTYPE"] + "_{condition}_modisco.h5"
+    params:
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/modisco_counts_samplepeaks/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        {params.script} chrombpnet modisco_motifs \
+        -i {input.count_scores} \
+        -op {params.out_prefix} \
+        -n 1000000
+        """
+
+rule model_modisco_profile:
+    benchmark:
+        "benchmarks/model_modisco_profile/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=64000,
+        gpus=0,
+        runtime=1440 #24h
+    input:
+        success=rules.model_shap_profile.output.success,
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/modisco_profile/")
+    params:
+        profile_scores=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_profile/{config['CELLTYPE']}_{w.condition}.profile_scores.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/modisco_profile/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} chrombpnet modisco_motifs \
+        -i {params.profile_scores} \
+        -op {params.out_prefix} \
+        -n 50000
+        """
+
+rule model_pred:
+    benchmark:
+        "benchmarks/model_pred/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=64000,
+        gpus=1,
+        runtime=240, #4h
+        partition="wjg,sfgf,biochem,gpu,owners"
+    input:
+        success=rules.model_train.output.success,
+        peak_set=config["CONTRIB_PEAKS"],
+        genome=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['GENOME']}",
+        chromsize=f"{config['RESOURCE_DIR']}/{config['RESOURCE']['CHROMSIZE']}",
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/pred_counts/"),
+        success="output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/.predsuccess",
+    params:
+        no_bias_model=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/models/chrombpnet_nobias.h5",
+        out_prefix=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/pred_counts/{config['CELLTYPE']}_{w.condition}",
+        script="./setup_environment.sh"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} chrombpnet pred_bw \
+        -cmb {params.no_bias_model} \
+        -r {input.peak_set} \
+        -g {input.genome} \
+        -c {input.chromsize} \
+        -op {params.out_prefix};
+        touch {output.success}
+        """
+
+rule finemo_ex:
+    benchmark:
+        "benchmarks/finemo_ex/fold_{fold}_" + config['CELLTYPE'] + "_{condition}.tsv"
+    threads: 8
+    resources:
+        mem_mb=16000,
+        gpus=1,
+        runtime=60 #1h
+    input:
+        #count_scores=rules.model_shap_samplepeaks.output.h5
+        folder=rules.model_shap.output.folder
+    output:
+        npz="output/models/fold_{fold}/" + config['CELLTYPE'] + "_{condition}/finemo_out/intermediate_inputs.npz",
+    params:
+        script="./setup_environment_finemo.sh",
+        count_scores = lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/interpret_counts/{config['CELLTYPE']}_{w.condition}.counts_scores.h5"
+    shell:
+        """
+        {params.script} finemo extract-regions-chrombpnet-h5 \
+        --h5s {params.count_scores} \
+        --out-path {output.npz} \
+        --region-width 500
+        """
+
+
+rule finemo_call:
+    benchmark:
+        "benchmarks/finemo_call/fold_{fold}_" + config['CELLTYPE'] + "_{condition}_{motifset}.tsv"
+    threads: 8
+    resources:
+        mem_mb=32000,
+        gpus=1,
+        runtime=120 #2h
+    input:
+        npz=rules.finemo_ex.output.npz,
+        #peak_set=rules.merge_reps_peaks.output,
+        peak_set=config["CONTRIB_PEAKS"],
+        #modisco_h5=rules.model_modisco_samplepeaks.output.h5
+        modisco_h5=lambda w: config["MERGED_MODISCO"][w.motifset]
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/finemo_out/{motifset}/hits"),
+    params:
+        script="./setup_environment_finemo.sh",
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} finemo call-hits \
+        -r {input.npz} \
+        -m {input.modisco_h5} \
+        -p {input.peak_set} \
+        -o {output.folder}
+        """
+
+rule finemo_report:
+    benchmark:
+        "benchmarks/finemo_report/fold_{fold}_" + config['CELLTYPE'] + "_{condition}_{motifset}.tsv"
+    threads: 8
+    resources:
+        mem_mb=16000,
+        gpus=0,
+        runtime=60 #1h
+    input:
+        npz=rules.finemo_ex.output.npz,
+        #peak_set=rules.merge_reps_peaks.output,
+        peak_set=config["CONTRIB_PEAKS"],
+        hits_folder=rules.finemo_call.output.folder,
+        #modisco_h5=rules.model_modisco_samplepeaks.output.h5
+        modisco_h5=lambda w: config["MERGED_MODISCO"][w.motifset]
+    output:
+        folder=directory("output/models/fold_{fold}/" + config["CELLTYPE"] + "_{condition}/finemo_out/{motifset}/report"),
+    params:
+        script="./setup_environment_finemo.sh",
+        hit=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/finemo_out/{w.motifset}/hits/hits.tsv"
+    shell:
+        """
+        mkdir -p {output.folder};
+        {params.script} finemo report \
+        -r {input.npz} \
+        -m {input.modisco_h5} \
+        -p {input.peak_set} \
+        -o {output.folder} \
+        -H {params.hit} \
+        -W 500 \
+        -n -s
+        """
+
+rule compress_index_hits_bed:
+    localrule: True
+    resources:
+        mem_mb=8000,
+        gpus=0,
+        runtime=60
+    input:
+        hits_folder=rules.finemo_call.output.folder
+    output:
+        gz="output/models/fold_{fold}/" + config['CELLTYPE'] + "_{condition}/finemo_out/{motifset}/hits.bed.gz",
+        tbi="output/models/fold_{fold}/" + config['CELLTYPE'] + "_{condition}/finemo_out/{motifset}/hits.bed.gz.tbi"
+    params:
+        hit=lambda w: f"output/models/fold_{w.fold}/{config['CELLTYPE']}_{w.condition}/finemo_out/{w.motifset}/hits/hits.bed"
+    shell:
+        """
+        bgzip -c {params.hit} > {output.gz};
+        tabix -p bed {output.gz}
+        """

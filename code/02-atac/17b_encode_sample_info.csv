@@ -1,0 +1,7 @@
+id,mod,fcbw,sigbw,bedfile,description
+1,H3K4me3,ENCFF439DDQ.bigWig,ENCFF315TAU.bigWig,ENCFF617NUV.bed.gz,active gene
+2,H3K36me3-1,ENCFF185KBK.bigWig,ENCFF714CDE.bigWig,ENCFF655QDU.bed.gz,active gene
+3,H3K36me3-2,ENCFF458PUF.bigWig,ENCFF264PIM.bigWig,ENCFF257ZFX.bed.gz,active gene
+4,H3K9me3,ENCFF526FQB.bigWig,ENCFF758LNF.bigWig,ENCFF899MET.bed.gz,repressed gene
+5,H3K27ac,ENCFF885SUR.bigWig,ENCFF157TGK.bigWig,ENCFF225FPN.bed.gz,active enhancer
+6,H3K4me1,ENCFF274LAP.bigWig,ENCFF003LZR.bigWig,ENCFF351MDO.bed.gz,not very specific marks all enhancer not just active enhancers
