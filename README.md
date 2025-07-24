@@ -46,6 +46,6 @@ This repository accompanies the preprint Liu et al, bioRxiv 2025b.
 
 
 ## Citation
-If you use this data or code, please cite: Liu et al, bioRxiv 2025.
+If you use this data or code, please cite: Liu et al, bioRxiv 2025b.
 
 
