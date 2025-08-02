@@ -2,7 +2,7 @@
 # RoboATAC
 ![](img/roboatac-logo.png) 
 
-This repository accompanies the preprint Liu et al, bioRxiv 2025b.
+This repository accompanies the preprint [Liu et al, bioRxiv 2025b](https://doi.org/10.1101/2025.07.24.666684).
 
 ## Code
 
@@ -46,6 +46,8 @@ This repository accompanies the preprint Liu et al, bioRxiv 2025b.
 
 
 ## Citation
-If you use this data or code, please cite: Liu et al, bioRxiv 2025b.
+If you use this data or code, please cite:
+
+An automated ATAC-seq method reveals sequence determinants of transcription factor dose response in the open chromatin. Betty B. Liu, Masaru Shimasawa, Sidney Vermeulen, Samuel H. Kim, Nika Iremadze, Doron Lipson, Zohar Shipony, William J. Greenleaf, bioRxiv 2025.07.24.666684; doi: https://doi.org/10.1101/2025.07.24.666684
 
 
